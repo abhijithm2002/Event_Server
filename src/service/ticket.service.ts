@@ -1,10 +1,8 @@
 import crypto from "crypto";
-import path from "path";
-import fs from "fs-extra";
 import QRCode from "qrcode";
-import nodemailer from "nodemailer";
 import { TicketRepository } from "../repositories/ticket.repository.js";
 import { Types } from "mongoose";
+import { Resend } from "resend";
 
 interface BookTicketParams {
     eventId: string;
@@ -13,17 +11,9 @@ interface BookTicketParams {
 }
 
 export default class TicketService {
-    constructor(private ticketRepository = TicketRepository) {}
+    constructor(private ticketRepository = TicketRepository) { }
 
-    private transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: Number(process.env.SMTP_PORT),
-        secure: process.env.SMTP_SECURE === "true",
-        auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-        },
-    });
+    private resend = new Resend(process.env.RESEND_API_KEY);
 
     async bookTicket({ eventId, userId, quantity }: BookTicketParams) {
         const event = await this.ticketRepository.findEventById(eventId);
@@ -35,33 +25,26 @@ export default class TicketService {
 
         const tickets = [];
 
-        // Directory to store QR images
-        const qrDir = path.join(process.cwd(), "uploads", "qrcodes");
-        await fs.ensureDir(qrDir);
-
         for (let i = 0; i < quantity; i++) {
             const code = crypto.randomBytes(16).toString("hex");
             const orderId = crypto.randomUUID();
 
-            // File path for QR code image
-            const qrFileName = `${code}.png`;
-            const qrFilePath = path.join(qrDir, qrFileName);
-
-            // Generate QR code as PNG file
-            await QRCode.toFile(qrFilePath, code);
+            // Generate QR as Base64
+            const qrBase64 = await QRCode.toDataURL(code);
+            const qrImageBase64 = qrBase64.split(",")[1]; // remove prefix
 
             const ticket = await this.ticketRepository.create({
                 event: eventId,
                 owner: userId,
                 orderId,
                 code,
-                qrData: qrFilePath, // store path in DB
+                qrData: qrBase64, // store base64 if needed
             });
 
             const user = await this.ticketRepository.findUserById(userId);
             if (user && user.email) {
-                await this.transporter.sendMail({
-                    from: `"Event Tickets" <${process.env.SMTP_USER}>`,
+                await this.resend.emails.send({
+                    from: "Event Tickets <onboarding@resend.dev>",
                     to: user.email,
                     subject: `Your Ticket for ${event.title}`,
                     html: `
@@ -69,17 +52,15 @@ export default class TicketService {
                         <p>Event: <b>${event.title}</b></p>
                         <p>Order ID: <b>${orderId}</b></p>
                         <p>Ticket Code: <b>${code}</b></p>
-                        <p>Show this QR code at entry:</p>
-                        <img src="cid:${code}" />
-                    `,
+                        <p>Your ticket QR is attached as a file.</p>`,
                     attachments: [
                         {
-                            filename: qrFileName,
-                            path: qrFilePath,
-                            cid: code, // same as src in <img>
+                            filename: `${code}.png`,
+                            content: qrImageBase64, // just the base64 string
                         },
                     ],
                 });
+
             }
 
             tickets.push(ticket);
@@ -91,26 +72,22 @@ export default class TicketService {
         return tickets;
     }
 
-    // Get tickets for a user
     async getUserTickets(userId: string) {
         return this.ticketRepository.findByUser(userId);
     }
 
-    // Cancel a ticket
     async cancelTicket(ticketId: string) {
         const ticket = await this.ticketRepository.findById(ticketId);
         if (!ticket) throw new Error("Ticket not found");
         if (ticket.status !== "active") throw new Error("Ticket cannot be cancelled");
 
-        // ✅ Decrease sold count when cancelled
         let eventId: string;
-
         if (typeof ticket.event === "string") {
             eventId = ticket.event;
         } else if (ticket.event instanceof Types.ObjectId) {
             eventId = ticket.event.toString();
         } else {
-            eventId = ticket.event._id!.toString(); 
+            eventId = ticket.event._id!.toString();
         }
 
         const event = await this.ticketRepository.findEventById(eventId);
@@ -122,7 +99,6 @@ export default class TicketService {
         return this.ticketRepository.update(ticketId, { status: "cancelled" });
     }
 
-    // Validate a ticket
     async validateTicket(ticketId: string) {
         const ticket = await this.ticketRepository.findById(ticketId);
         if (!ticket) throw new Error("Ticket not found");
