@@ -7,7 +7,7 @@ const eventController = new EventController()
 
 
 router.post("/createEvent",verifyJwt, eventController.createEvent.bind(eventController));
-router.get("/getAllEvents",verifyJwt, eventController.getAllEvents.bind(eventController));
+router.get("/getAllEvents", eventController.getAllEvents.bind(eventController));
 router.get("/getMyEvents",verifyJwt, eventController.getMyEvents.bind(eventController));
 router.get("/getEventById/:eventId",verifyJwt, eventController.getEventById.bind(eventController));
 router.put("/updateEvent/:eventId",verifyJwt, eventController.updateEvent.bind(eventController));

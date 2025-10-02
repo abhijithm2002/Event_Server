@@ -23,7 +23,7 @@ export default class TicketController {
 
   async getMyTickets(req: Request, res: Response): Promise<void> {
     try {
-      const { userId } = req.params;
+      const userId = req.params.userId;
       const tickets = await this.ticketService.getUserTickets(userId);
       res.status(200).json(tickets);
     } catch (error: any) {
